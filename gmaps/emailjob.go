@@ -94,7 +94,37 @@ func (j *EmailExtractJob) Process(ctx context.Context, resp *scrapemate.Response
 
 	j.Entry.Emails = emails
 
+	// The page is already parsed, so harvesting social profiles here costs no
+	// extra request. Merge rather than assign: a profile taken from the Maps
+	// "website" field is more authoritative than one linked in a page footer.
+	found := extractSocials(docLinkExtractor(doc))
+	j.Entry.Socials.Merge(&found)
+
 	return j.Entry, nil, nil
+}
+
+// docLinkExtractor returns every href on the page, including the meta tags that
+// sites commonly use to declare their canonical profiles.
+func docLinkExtractor(doc *goquery.Document) []string {
+	var hrefs []string
+
+	doc.Find("a[href]").Each(func(_ int, s *goquery.Selection) {
+		if href, ok := s.Attr("href"); ok {
+			hrefs = append(hrefs, href)
+		}
+	})
+
+	doc.Find(`meta[property="og:see_also"], link[rel="me"]`).Each(func(_ int, s *goquery.Selection) {
+		if content, ok := s.Attr("content"); ok {
+			hrefs = append(hrefs, content)
+		}
+
+		if href, ok := s.Attr("href"); ok {
+			hrefs = append(hrefs, href)
+		}
+	})
+
+	return hrefs
 }
 
 func (j *EmailExtractJob) ProcessOnFetchError() bool {

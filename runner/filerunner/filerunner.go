@@ -11,6 +11,7 @@ import (
 
 	"github.com/gosom/google-maps-scraper/deduper"
 	"github.com/gosom/google-maps-scraper/exiter"
+	"github.com/gosom/google-maps-scraper/export"
 	"github.com/gosom/google-maps-scraper/grid"
 	"github.com/gosom/google-maps-scraper/leadsdb"
 	"github.com/gosom/google-maps-scraper/runner"
@@ -205,12 +206,13 @@ func (r *fileRunner) setWriters() error {
 			resultsWriter = r.outfile
 		}
 
-		csvWriter := csvwriter.NewCsvWriter(csv.NewWriter(resultsWriter))
-
-		if r.cfg.JSON {
+		switch {
+		case r.cfg.JSON:
 			r.writers = append(r.writers, jsonwriter.NewJSONWriter(resultsWriter))
-		} else {
-			r.writers = append(r.writers, csvWriter)
+		case r.cfg.XLSX:
+			r.writers = append(r.writers, export.NewXLSXWriter(resultsWriter))
+		default:
+			r.writers = append(r.writers, csvwriter.NewCsvWriter(csv.NewWriter(resultsWriter)))
 		}
 	}
 

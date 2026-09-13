@@ -24,6 +24,10 @@ type GmapJob struct {
 	MaxDepth     int
 	LangCode     string
 	ExtractEmail bool
+	// Query is the search term as typed, kept so every result can record which
+	// search produced it. The URL cannot be used for this: it is percent-encoded
+	// and, for direct Maps links, contains no search term at all.
+	Query string
 
 	Deduper                 deduper.Deduper
 	ExitMonitor             exiter.Exiter
@@ -40,6 +44,8 @@ func NewGmapJob(
 	opts ...GmapJobOptions,
 ) *GmapJob {
 	var mapURL string
+
+	searchTerm := strings.TrimSpace(query)
 
 	switch {
 	case isGoogleMapsURL(query):
@@ -74,6 +80,7 @@ func NewGmapJob(
 		MaxDepth:     maxDepth,
 		LangCode:     langCode,
 		ExtractEmail: extractEmail,
+		Query:        searchTerm,
 	}
 
 	for _, opt := range opts {
@@ -152,6 +159,8 @@ func (j *GmapJob) Process(ctx context.Context, resp *scrapemate.Response) (any, 
 			jopts = append(jopts, WithPlaceJobWriterManagedCompletion())
 		}
 
+		jopts = append(jopts, WithPlaceJobQuery(j.Query))
+
 		placeJob := NewPlaceJob(j.ID, j.LangCode, resp.URL, j.ExtractEmail, j.ExtractExtraReviews, jopts...)
 
 		next = append(next, placeJob)
@@ -166,6 +175,8 @@ func (j *GmapJob) Process(ctx context.Context, resp *scrapemate.Response) (any, 
 				if j.WriterManagedCompletion {
 					jopts = append(jopts, WithPlaceJobWriterManagedCompletion())
 				}
+
+				jopts = append(jopts, WithPlaceJobQuery(j.Query))
 
 				nextJob := NewPlaceJob(j.ID, j.LangCode, href, j.ExtractEmail, j.ExtractExtraReviews, jopts...)
 
@@ -317,63 +328,83 @@ func scroll(ctx context.Context,
 		});
 	}`
 
-	var currentScrollHeight int
-	// Scroll to the bottom of the page.
-	waitTime := 100.
-	cnt := 0
-
 	const (
-		timeout  = 500
-		maxWait2 = 2000
+		// The first batch of extra results is the slowest to arrive, and giving up
+		// on it costs the entire rest of the list, so it gets the longest wait.
+		firstWaitMs  = 1500
+		steadyWaitMs = 2000
+
+		// Google appends results asynchronously. A single unchanged height means
+		// "nothing arrived yet", not "there is nothing left", so the end of the
+		// list is only believed after several quiet rounds in a row.
+		maxQuietRounds = 3
 	)
 
-	for i := 0; i < maxDepth; i++ {
-		cnt++
-		waitTime2 := timeout * cnt
+	var (
+		currentScrollHeight int
+		scrolls             int
+		quiet               int
+	)
 
-		if waitTime2 > timeout {
-			waitTime2 = maxWait2
+	// Retries must not eat into the requested depth, but the total work still has
+	// to be bounded so a stuck feed cannot spin.
+	maxAttempts := maxDepth + maxQuietRounds*2
+
+	for attempt := 0; scrolls < maxDepth && attempt < maxAttempts; attempt++ {
+		waitMs := steadyWaitMs
+		if attempt == 0 {
+			waitMs = firstWaitMs
 		}
 
-		// Scroll to the bottom of the page.
-		scrollHeight, err := page.Eval(fmt.Sprintf(expr, waitTime2))
+		scrollHeight, err := page.Eval(fmt.Sprintf(expr, waitMs))
 		if err != nil {
-			return cnt, err
+			return scrolls, err
 		}
 
 		// Handle both int and float64 because browser-evaluated numbers may arrive as either type.
 		var height int
+
 		switch v := scrollHeight.(type) {
 		case int:
 			height = v
 		case float64:
 			height = int(v)
 		default:
-			return cnt, fmt.Errorf("scrollHeight is not a number, got %T", scrollHeight)
+			return scrolls, fmt.Errorf("scrollHeight is not a number, got %T", scrollHeight)
 		}
 
 		if height == currentScrollHeight {
-			break
+			quiet++
+			if quiet >= maxQuietRounds {
+				break
+			}
+
+			select {
+			case <-ctx.Done():
+				return scrolls, nil
+			default:
+			}
+
+			// Wait longer before asking again: the feed is simply behind.
+			page.WaitForTimeout(time.Duration(steadyWaitMs) * time.Millisecond)
+
+			continue
 		}
 
+		quiet = 0
+		scrolls++
 		currentScrollHeight = height
 
 		select {
 		case <-ctx.Done():
-			return currentScrollHeight, nil
+			return scrolls, nil
 		default:
 		}
 
-		waitTime *= 1.5
-
-		if waitTime > maxWait2 {
-			waitTime = maxWait2
-		}
-
-		page.WaitForTimeout(time.Duration(waitTime) * time.Millisecond)
+		page.WaitForTimeout(time.Duration(steadyWaitMs) * time.Millisecond)
 	}
 
-	return cnt, nil
+	return scrolls, nil
 }
 
 func isGoogleMapsURL(s string) bool {

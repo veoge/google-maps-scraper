@@ -3,7 +3,7 @@ package webrunner
 
 import (
 	"context"
-	"io"
+	"os"
 	"testing"
 	"time"
 
@@ -42,7 +42,7 @@ func TestScrapeJobMarksOKBeforeClosingMate(t *testing.T) {
 	w := &webrunner{
 		svc: svc,
 		cfg: &runner.Config{DataFolder: t.TempDir(), Concurrency: 1},
-		setupMate: func(_ context.Context, _ io.Writer, _ *web.Job) (mateRunner, error) {
+		setupMate: func(_ context.Context, _ *os.File, _ *web.Job) (mateRunner, error) {
 			return fakeMate{
 				onClose: func() {
 					got, err := svc.Get(context.Background(), job.ID)

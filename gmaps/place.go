@@ -20,6 +20,7 @@ type PlaceJob struct {
 
 	UsageInResults          bool
 	ExtractEmail            bool
+	Query                   string
 	ExitMonitor             exiter.Exiter
 	ExtractExtraReviews     bool
 	WriterManagedCompletion bool
@@ -52,6 +53,13 @@ func NewPlaceJob(parentID, langCode, u string, extractEmail, extraExtraReviews b
 	}
 
 	return &job
+}
+
+// WithPlaceJobQuery records the search term that led to this place.
+func WithPlaceJobQuery(query string) PlaceJobOptions {
+	return func(j *PlaceJob) {
+		j.Query = query
+	}
 }
 
 func WithPlaceJobExitMonitor(exitMonitor exiter.Exiter) PlaceJobOptions {
@@ -104,6 +112,7 @@ func (j *PlaceJob) Process(_ context.Context, resp *scrapemate.Response) (any, [
 	}
 
 	entry.ID = j.ParentID
+	entry.Keyword = j.Query
 
 	if entry.Link == "" {
 		entry.Link = j.GetURL()

@@ -302,6 +302,18 @@ docker run \
 
 Then open http://localhost:8080 in your browser.
 
+The browser interface shows results directly, so you do not have to download a file to see what a
+job found:
+
+- **Country and city pickers** covering the Arab League markets, Jordan first. Choosing a city
+  scrapes the **whole city**, not a radius around its centre
+- **Results table** with search, sorting, and filters for search term, rating, category, city, and
+  whether a business has a website, phone, email, or social profile
+- **Detail panel** for any row: contact details, social profiles, rating breakdown, opening hours,
+  amenities, and review text
+- **Map view** of the current filter selection
+- **Export** as a formatted Excel workbook, CSV, or JSON
+
 Or download the [binary release](https://github.com/gosom/google-maps-scraper/releases) for your platform.
 
 > **Note:** Results take at least 3 minutes to appear (minimum configured runtime).
@@ -413,46 +425,55 @@ go build
 ## Extracted Data Points
 
 <details>
-<summary><strong>Click to expand all 36 data points</strong></summary>
+<summary><strong>Click to expand all 45 data points</strong></summary>
 
 | # | Field | Description |
 |---|-------|-------------|
 | 1 | `input_id` | Internal identifier for the input query |
-| 2 | `link` | Direct URL to the Google Maps listing |
-| 3 | `title` | Business name |
-| 4 | `category` | Business type (e.g., Restaurant, Hotel) |
-| 5 | `address` | Street address |
-| 6 | `open_hours` | Operating hours |
-| 7 | `popular_times` | Visitor traffic patterns |
-| 8 | `website` | Official business website |
-| 9 | `phone` | Contact phone number |
-| 10 | `plus_code` | Location shortcode |
-| 11 | `review_count` | Total number of reviews |
-| 12 | `review_rating` | Average star rating |
-| 13 | `reviews_per_rating` | Breakdown by star rating |
-| 14 | `latitude` | GPS latitude |
-| 15 | `longitude` | GPS longitude |
-| 16 | `cid` | Google's unique Customer ID |
-| 17 | `status` | Business status (open/closed/temporary) |
-| 18 | `descriptions` | Business description |
-| 19 | `reviews_link` | Direct link to reviews |
-| 20 | `thumbnail` | Thumbnail image URL |
-| 21 | `timezone` | Business timezone |
-| 22 | `price_range` | Price level ($, $$, $$$) |
-| 23 | `data_id` | Internal Google Maps identifier |
-| 24 | `street_view_url` | Street View URL |
-| 25 | `place_id` | Google's unique place id |
-| 26 | `images` | Associated image URLs |
-| 27 | `reservations` | Reservation booking link |
-| 28 | `order_online` | Online ordering link |
-| 29 | `menu` | Menu link |
-| 30 | `owner` | Owner-claimed status |
-| 31 | `complete_address` | Full formatted address |
-| 32 | `credit_cards_accepted` | Accepted credit card networks |
-| 33 | `about` | Additional business info |
-| 34 | `user_reviews` | Customer reviews (text, rating, timestamp) |
-| 35 | `user_reviews_extended` | Extended reviews up to ~300 (requires `-extra-reviews`) |
-| 36 | `emails` | Extracted email addresses (requires `-email` flag) |
+| 2 | `search_term` | The search that produced this result; groups the Excel export |
+| 3 | `link` | Direct URL to the Google Maps listing |
+| 4 | `title` | Business name |
+| 5 | `category` | Business type (e.g., Restaurant, Hotel) |
+| 6 | `address` | Street address |
+| 7 | `open_hours` | Operating hours |
+| 8 | `popular_times` | Visitor traffic patterns |
+| 9 | `website` | Official business website |
+| 10 | `phone` | Contact phone number |
+| 11 | `plus_code` | Location shortcode |
+| 12 | `review_count` | Total number of reviews |
+| 13 | `review_rating` | Average star rating |
+| 14 | `reviews_per_rating` | Breakdown by star rating |
+| 15 | `latitude` | GPS latitude |
+| 16 | `longitude` | GPS longitude |
+| 17 | `cid` | Google's unique Customer ID |
+| 18 | `status` | Business status (open/closed/temporary) |
+| 19 | `descriptions` | Business description |
+| 20 | `reviews_link` | Direct link to reviews |
+| 21 | `thumbnail` | Thumbnail image URL |
+| 22 | `timezone` | Business timezone |
+| 23 | `price_range` | Price level ($, $$, $$$) |
+| 24 | `data_id` | Internal Google Maps identifier |
+| 25 | `street_view_url` | Street View URL |
+| 26 | `place_id` | Google's unique place id |
+| 27 | `images` | Associated image URLs |
+| 28 | `reservations` | Reservation booking link |
+| 29 | `order_online` | Online ordering link |
+| 30 | `menu` | Menu link |
+| 31 | `owner` | Owner-claimed status |
+| 32 | `complete_address` | Full formatted address |
+| 33 | `credit_cards_accepted` | Accepted credit card networks |
+| 34 | `about` | Additional business info |
+| 35 | `user_reviews` | Customer reviews (text, rating, timestamp) |
+| 36 | `user_reviews_extended` | Extended reviews up to ~300 (requires `-extra-reviews`) |
+| 37 | `emails` | Extracted email addresses (requires `-email` flag) |
+| 38 | `social` | All social profiles found, comma separated (requires `-email` flag) |
+| 39 | `facebook` | Facebook page |
+| 40 | `instagram` | Instagram profile |
+| 41 | `linkedin` | LinkedIn page |
+| 42 | `twitter_x` | X (Twitter) profile |
+| 43 | `youtube` | YouTube channel |
+| 44 | `tiktok` | TikTok profile |
+| 45 | `whatsapp` | WhatsApp contact link |
 
 </details>
 
@@ -485,11 +506,12 @@ Core Options:
   -input string       Path to input file with queries (one per line)
   -results string     Output file path (default: stdout)
   -json              Output JSON instead of CSV
+  -xlsx              Output a formatted Excel workbook (implied by a .xlsx -results path)
   -depth int         Max scroll depth in results (default: 10)
   -c int             Concurrency level (default: half of CPU cores)
 
-Email & Reviews:
-  -email             Extract emails from business websites
+Website Enrichment & Reviews:
+  -email             Visit each business website to extract emails and social profiles
   -extra-reviews     Collect extended reviews (up to ~300)
 
 Location Settings:
@@ -531,6 +553,94 @@ Notes:
 ```
 
 Run `./google-maps-scraper -h` for the complete list.
+
+### Choosing Where To Search
+
+The web form has a country picker (Arab League markets, defaulting to Jordan) and a city picker that
+follows from it. Picking a city does **not** search outwards from the city centre with a radius.
+Each city carries a bounding box, and the job splits that box into a grid, searching every cell, so
+the whole built-up area is covered — outskirts included.
+
+The coverage setting controls the grid resolution:
+
+| Coverage | Cell size | Amman, for example |
+|---|---|---|
+| Quick | 6 km | ~48 cells |
+| Balanced (default) | 3 km | ~176 cells |
+| Thorough | 1.5 km | ~700 cells |
+
+The form shows the resulting number of searches and a rough duration before you start, and warns
+when the job would outlast its maximum run time (a job that runs out of time stops part-way through
+and returns only part of the city).
+
+Selecting a country without a city leaves the grid off and falls back to a plain keyword search —
+grid-scraping an entire country would run for days.
+
+The market list lives in `geo/geo.go`; adding a country or a city means adding one entry with its
+bounding box.
+
+### Searching For Several Things At Once
+
+Searches can be entered one per line or separated by commas:
+
+```
+restaurants, coffee shops, supermarkets
+```
+
+Every result records the search term that found it, in the `search_term` column. That drives:
+
+- **In the browser** — a "Search" column, a filter for one term, and a *Group by search* toggle that
+  splits the table into labelled sections
+- **In Excel** — one worksheet per search term, so the example above returns `Restaurants`,
+  `Coffee shops` and `Supermarkets` tabs alongside the combined `Leads` sheet
+- **In the Summary sheet** — a results-per-search breakdown
+
+Above 25 distinct searches the per-term tabs are skipped, since the filterable `Leads` sheet is
+easier to navigate at that point than 25 worksheets.
+
+### Excel Export
+
+Passing a `.xlsx` output path (or the `-xlsx` flag) produces a formatted workbook rather than a
+single flat sheet:
+
+```bash
+docker run   -v gmaps-playwright-cache:/opt   -v "$PWD/example-queries.txt:/queries.txt:ro"   -v "$PWD/gmaps-output:/out"   gosom/google-maps-scraper   -input /queries.txt   -results /out/leads.xlsx   -depth 1   -email   -exit-on-inactivity 3m
+```
+
+The workbook contains four sheets:
+
+| Sheet | Contents |
+|---|---|
+| **Leads** | One row per business, with frozen headers, filters, and clickable links |
+| **Reviews** | One row per review: author, rating, date, language, and full text |
+| **Opening Hours** | One row per business per day |
+| **Summary** | Totals, average rating, contactability, and category/city breakdowns |
+
+The Leads sheet flattens the fields that are JSON blobs in the CSV — opening hours become seven day
+columns, the rating breakdown becomes five star columns, the address is split into street/city/
+postcode/country, and `about` becomes filterable Yes/No columns (delivery, dine-in, reservations,
+wheelchair access, card payments) plus a readable amenities summary. Popular times collapse to
+`Busiest Day` and `Busiest Hour`.
+
+**Why the workbook rather than the CSV:** identifiers such as `cid` are 19-digit numbers, and Excel
+silently rounds those to 15 significant digits when it opens a CSV, turning `18104602341234567890`
+into `1.81046E+19` with the remainder unrecoverable. The workbook writes them as text so they stay
+exact. CSV downloads from the web UI now also carry a UTF-8 BOM, which is what stops Excel decoding
+non-Latin names with the system ANSI code page and showing mojibake.
+
+### Social Profiles
+
+The `-email` flag visits each business's own website. Social profiles are collected during that same
+page fetch, so they cost no extra requests:
+
+- A combined `social` column with every profile found
+- Individual `facebook`, `instagram`, `linkedin`, `twitter_x`, `youtube`, `tiktok` and `whatsapp`
+  columns
+- Businesses whose Maps "website" is itself a Facebook or Instagram page are captured too, even
+  without `-email`
+
+Share widgets and login pages (`facebook.com/sharer`, `twitter.com/intent`, bare domains) are
+filtered out, and where a network appears more than once the profile root wins over a deep link.
 
 ### Using Proxies
 

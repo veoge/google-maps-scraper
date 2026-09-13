@@ -19,6 +19,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/gosom/google-maps-scraper/export"
+	"github.com/gosom/google-maps-scraper/geo"
 )
 
 //go:embed static
@@ -70,6 +73,22 @@ func New(svc *Service, addr string) (*Server, error) {
 
 		ans.viewJob(w, r)
 	})
+	mux.HandleFunc("/continue", func(w http.ResponseWriter, r *http.Request) {
+		r = requestWithID(r)
+
+		ans.resume(w, r)
+	})
+	mux.HandleFunc("/restart", func(w http.ResponseWriter, r *http.Request) {
+		r = requestWithID(r)
+
+		ans.restart(w, r)
+	})
+	mux.HandleFunc("/api/v1/locations", ans.locations)
+	mux.HandleFunc("/results", func(w http.ResponseWriter, r *http.Request) {
+		r = requestWithID(r)
+
+		ans.results(w, r)
+	})
 	mux.HandleFunc("/", ans.index)
 
 	// api routes
@@ -106,6 +125,12 @@ func New(svc *Service, addr string) (*Server, error) {
 
 			renderJSON(w, http.StatusMethodNotAllowed, ans)
 		}
+	})
+
+	mux.HandleFunc("/api/v1/jobs/{id}/results", func(w http.ResponseWriter, r *http.Request) {
+		r = requestWithID(r)
+
+		ans.results(w, r)
 	})
 
 	mux.HandleFunc("/api/v1/jobs/{id}/download", func(w http.ResponseWriter, r *http.Request) {
@@ -221,6 +246,23 @@ func (f formData) KeywordsString() string {
 	return strings.Join(f.Keywords, "\n")
 }
 
+// renderTemplate writes a template to the response, turning a failure into a
+// logged 500 instead of a silently blank page. Executing straight into the
+// ResponseWriter cannot do that: by the time it fails, a partial body is already
+// on the wire and the status is fixed.
+func renderTemplate(w http.ResponseWriter, tmpl *template.Template, name string, data any) {
+	var buf bytes.Buffer
+
+	if err := tmpl.Execute(&buf, data); err != nil {
+		log.Printf("render %s: %v", name, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	_, _ = buf.WriteTo(w)
+}
+
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -246,10 +288,31 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		Lat:      "0",
 		Lon:      "0",
 		Depth:    10,
-		Email:    false,
+		// Website enrichment is on by default: it is the only pass that visits a
+		// business's own site, and therefore the only source of email addresses
+		// and social profiles. It can be switched off per job in the form.
+		Email: true,
 	}
 
-	_ = tmpl.Execute(w, data)
+	renderTemplate(w, tmpl, "index", data)
+}
+
+// splitKeywords accepts searches separated by newlines or commas, because both
+// are natural ways to type "restaurants, coffee shops, supermarkets". The place
+// name no longer needs to appear in the query now that country and city are
+// chosen separately, so a comma is a separator rather than part of a search.
+func splitKeywords(raw string) []string {
+	out := []string{}
+
+	for _, line := range strings.Split(raw, "\n") {
+		for _, part := range strings.Split(line, ",") {
+			if k := strings.TrimSpace(part); k != "" {
+				out = append(out, k)
+			}
+		}
+	}
+
+	return out
 }
 
 func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
@@ -298,15 +361,7 @@ func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keywords := strings.Split(keywordsStr[0], "\n")
-	for _, k := range keywords {
-		k = strings.TrimSpace(k)
-		if k == "" {
-			continue
-		}
-
-		newJob.Data.Keywords = append(newJob.Data.Keywords, k)
-	}
+	newJob.Data.Keywords = splitKeywords(keywordsStr[0])
 
 	newJob.Data.Lang = r.Form.Get("lang")
 
@@ -339,6 +394,12 @@ func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newJob.Data.Email = r.Form.Get("email") == "on"
+
+	if err := applyLocation(&newJob.Data, r.Form.Get("country"), r.Form.Get("city"), r.Form.Get("coverage")); err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+
+		return
+	}
 
 	proxies := strings.Split(r.Form.Get("proxies"), "\n")
 	if len(proxies) > 0 {
@@ -373,7 +434,7 @@ func (s *Server) scrape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = tmpl.Execute(w, newJob)
+	renderTemplate(w, tmpl, "job_row", newJob)
 }
 
 func (s *Server) getJobs(w http.ResponseWriter, r *http.Request) {
@@ -396,7 +457,7 @@ func (s *Server) getJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = tmpl.Execute(w, jobs)
+	renderTemplate(w, tmpl, "job_rows", jobs)
 }
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
@@ -415,28 +476,333 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath, err := s.svc.GetCSV(ctx, id.String())
+	switch strings.ToLower(r.URL.Query().Get("format")) {
+	case "xlsx", "excel":
+		s.downloadXLSX(w, r, id.String())
+	case "json":
+		s.downloadJSON(w, r, id.String())
+	default:
+		s.downloadCSV(ctx, w, id.String())
+	}
+}
+
+// downloadCSV streams the job's CSV with a UTF-8 byte order mark. Without the
+// BOM, Excel on Windows opens the file using the system ANSI code page, which
+// renders every non-Latin name and every typographic dash as mojibake
+// ("Ù…Ø·Ø¹Ù…" instead of Arabic). The bytes on disk were always correct; only
+// Excel's guess was wrong.
+func (s *Server) downloadCSV(ctx context.Context, w http.ResponseWriter, id string) {
+	filePath, err := s.svc.GetCSV(ctx, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
+
 		return
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
 		http.Error(w, "Failed to open file", http.StatusInternalServerError)
+
 		return
 	}
-	defer file.Close()
+
+	defer func() {
+		_ = file.Close()
+	}()
 
 	fileName := filepath.Base(filePath)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", fileName))
-	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 
-	_, err = io.Copy(w, file)
-	if err != nil {
-		http.Error(w, "Failed to send file", http.StatusInternalServerError)
+	if _, err := w.Write([]byte(export.BOM)); err != nil {
 		return
 	}
+
+	if _, err = io.Copy(w, file); err != nil {
+		log.Printf("download csv %s: %v", id, err)
+	}
+}
+
+// downloadXLSX renders the job's results as a formatted workbook. The file is
+// built on demand from the stored CSV so that jobs scraped before this format
+// existed can still be exported.
+func (s *Server) downloadXLSX(w http.ResponseWriter, r *http.Request, id string) {
+	entries, err := s.svc.LoadEntries(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+
+		return
+	}
+
+	var buf bytes.Buffer
+
+	if err := export.BuildWorkbook(entries, &buf); err != nil {
+		log.Printf("download xlsx %s: %v", id, err)
+		http.Error(w, "failed to build workbook", http.StatusInternalServerError)
+
+		return
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.xlsx", id))
+	w.Header().Set("Content-Type",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+
+	_, _ = buf.WriteTo(w)
+}
+
+func (s *Server) downloadJSON(w http.ResponseWriter, r *http.Request, id string) {
+	entries, err := s.svc.LoadEntries(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+
+		return
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.json", id))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+
+	_ = enc.Encode(entries)
+}
+
+// coverageCellKm maps the coverage choice offered in the UI onto a grid cell
+// size. Smaller cells mean more searches and better coverage of dense areas.
+//
+//nolint:gochecknoglobals // lookup table, read-only after init.
+var coverageCellKm = map[string]float64{
+	"quick":    6.0,
+	"balanced": 3.0,
+	"thorough": 1.5,
+}
+
+// coverageSingle runs one search per term anchored on the city instead of a grid.
+// A grid over a whole city multiplied by a dozen categories runs for days, so this
+// is the sweep to start with: far faster, at the cost of only seeing what Google
+// returns for a single search rather than every side street.
+const coverageSingle = "single"
+
+// citySweepZoom is the map zoom used for a single sweep. The form default (15) is
+// street level and would only cover a neighbourhood; 12 frames the whole city.
+const citySweepZoom = 12
+
+// applyLocation turns the country and city choices into a bounding box, so the
+// job covers the whole selected city rather than a radius around its centre.
+// A country with no city selected leaves the box unset and falls back to a plain
+// keyword search, because grid-scraping an entire country is rarely what anyone
+// means and would run for days.
+func applyLocation(data *JobData, countryCode, cityName, coverage string) error {
+	data.Country = countryCode
+	data.City = cityName
+	data.Coverage = strings.ToLower(strings.TrimSpace(coverage))
+
+	if countryCode == "" {
+		return nil
+	}
+
+	country, city, ok := geo.Lookup(countryCode, cityName)
+	if !ok {
+		return fmt.Errorf("unknown location: %s / %s", countryCode, cityName)
+	}
+
+	data.Country = country.Code
+
+	cell, known := coverageCellKm[strings.ToLower(coverage)]
+	if !known {
+		cell = coverageCellKm["balanced"]
+		data.Coverage = "balanced"
+	}
+
+	// No city means every city in the country, each gridded in turn.
+	if cityName == "" {
+		if strings.EqualFold(coverage, coverageSingle) {
+			return nil
+		}
+
+		data.BBoxes = make([]string, 0, len(country.Cities))
+		for _, c := range country.Cities {
+			data.BBoxes = append(data.BBoxes, c.BBoxString())
+		}
+
+		data.CellSizeKm = cell
+
+		return nil
+	}
+
+	data.City = city.Name
+	data.Lat = strconv.FormatFloat(city.Lat, 'f', 6, 64)
+	data.Lon = strconv.FormatFloat(city.Lon, 'f', 6, 64)
+
+	if strings.EqualFold(coverage, coverageSingle) {
+		// No bounding box means no grid: the job falls back to one search per term,
+		// anchored on the city centre at a zoom that frames the city.
+		data.BBox = ""
+		data.CellSizeKm = 0
+		data.Zoom = citySweepZoom
+
+		return nil
+	}
+
+	data.BBox = city.BBoxString()
+	data.CellSizeKm = cell
+
+	return nil
+}
+
+// locations serves the country and city list that populates the dropdowns.
+func (s *Server) locations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	renderJSON(w, http.StatusOK, map[string]any{
+		"default_country": geo.DefaultCountry,
+		"countries":       geo.Countries(),
+	})
+}
+
+// results returns a job's scraped rows as JSON so the browser can show them in a
+// table instead of forcing a download to see anything at all.
+func (s *Server) results(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	id, ok := getIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Invalid ID", http.StatusUnprocessableEntity)
+
+		return
+	}
+
+	res, err := s.svc.GetResults(r.Context(), id.String())
+	if err != nil {
+		if errors.Is(err, ErrPlacesNotFound) {
+			renderJSON(w, http.StatusOK, ResultsResponse{Rows: []ResultRow{}})
+
+			return
+		}
+
+		log.Printf("results %s: %v", id, err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	renderJSON(w, http.StatusOK, res)
+}
+
+// resume puts a paused job back in the queue. Its progress marker is kept, so
+// the worker carries on from where the outage stopped it rather than starting
+// the grid again.
+func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	id, ok := getIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Invalid ID", http.StatusUnprocessableEntity)
+
+		return
+	}
+
+	job, err := s.svc.Get(r.Context(), id.String())
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+
+		return
+	}
+
+	if job.Status != StatusPaused {
+		http.Error(w, "only a paused scan can be continued", http.StatusConflict)
+
+		return
+	}
+
+	job.Status = StatusPending
+	job.Data.PausedReason = ""
+
+	if err := s.svc.Update(r.Context(), &job); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	tmpl, ok := s.tmpl["static/templates/job_row.html"]
+	if !ok {
+		http.Error(w, "missing tpl", http.StatusInternalServerError)
+
+		return
+	}
+
+	renderTemplate(w, tmpl, "job_row", job)
+}
+
+// restart queues a fresh job with the same settings as an existing one. The
+// original is left untouched: its results stay downloadable while the repeat
+// run collects a new set.
+func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	id, ok := getIDFromRequest(r)
+	if !ok {
+		http.Error(w, "Invalid ID", http.StatusUnprocessableEntity)
+
+		return
+	}
+
+	original, err := s.svc.Get(r.Context(), id.String())
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+
+		return
+	}
+
+	repeat := Job{
+		ID:     uuid.New().String(),
+		Name:   original.Name,
+		Date:   time.Now().UTC(),
+		Status: StatusPending,
+		Data:   original.Data,
+	}
+
+	// Timings belong to the run that produced them, not to the repeat.
+	repeat.Data.StartedAt = nil
+	repeat.Data.FinishedAt = nil
+
+	if err := repeat.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+
+		return
+	}
+
+	if err := s.svc.Create(r.Context(), &repeat); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	tmpl, ok := s.tmpl["static/templates/job_row.html"]
+	if !ok {
+		http.Error(w, "missing tpl", http.StatusInternalServerError)
+
+		return
+	}
+
+	renderTemplate(w, tmpl, "job_row", repeat)
 }
 
 func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
@@ -485,7 +851,7 @@ func (s *Server) redocHandler(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	_ = tmpl.Execute(w, nil)
+	renderTemplate(w, tmpl, "redoc", nil)
 }
 
 func (s *Server) apiScrape(w http.ResponseWriter, r *http.Request) {
@@ -686,7 +1052,11 @@ func securityHeaders(next http.Handler) http.Handler {
 				"script-src 'self' cdn.redoc.ly cdnjs.cloudflare.com 'unsafe-inline' 'unsafe-eval'; "+
 				"worker-src 'self' blob:; "+
 				"style-src 'self' 'unsafe-inline' fonts.googleapis.com cdnjs.cloudflare.com; "+
-				"img-src 'self' data: cdn.redoc.ly cdnjs.cloudflare.com *.tile.openstreetmap.org; "+
+				// Business photos and Street View thumbnails are served from Google's
+				// image hosts. Without them the detail panel shows broken images.
+				"img-src 'self' data: cdn.redoc.ly cdnjs.cloudflare.com "+
+				"*.tile.openstreetmap.org *.googleusercontent.com "+
+				"streetviewpixels-pa.googleapis.com maps.gstatic.com; "+
 				"font-src 'self' fonts.gstatic.com; "+
 				"connect-src 'self'")
 

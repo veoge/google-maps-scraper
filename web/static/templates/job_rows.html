@@ -1,24 +1,39 @@
 {{range .}}
-<tr>
-    <td>{{.ID}}</td>
-    <td>{{.Name}}</td>
-    <td>{{.Date}}</td>
-    <td>
-        <span class="status-indicator status-{{.Status}}">{{.Status}}</span>
-    </td>
-    <td>
-        {{ if eq .Status "ok" }}
-            <button type="button" class="button view-button"
-                    hx-get="/view?id={{.ID}}"
-                    hx-target="#map-modal-container"
-                    hx-swap="innerHTML">View</button>
-            <a href="/download?id={{.ID}}" download class="button download-button">Download</a>
-        {{ end }}
-        <button hx-delete="/delete?id={{.ID}}" 
-                hx-target="closest tr"
-                hx-swap="outerHTML"
-                hx-confirm="Are you sure you want to delete this job?"
-                class="delete-button">Delete</button>
+<tr data-job-id="{{.ID}}" data-status="{{.Status}}"
+    {{ if eq .Status "ok" }}onclick="selectJob('{{.ID}}', '{{.Name}}')" style="cursor:pointer"{{ end }}>
+    <td title="{{.ID}}">{{ slice .ID 0 8 }}</td>
+    <td class="cell-title">{{.Name}}</td>
+    <td class="nowrap muted">{{.Date}}</td>
+    <td><span class="badge status-{{.Status}}">{{.Status}}</span></td>
+    <td class="nowrap job-duration" data-started="{{.StartedUnix}}" data-duration="{{.DurationSeconds}}" data-status="{{.Status}}"></td>
+    <td class="nowrap">
+        <div class="btn-group">
+            {{ if eq .Status "paused" }}
+                <button type="button" class="btn btn-sm btn-continue"
+                        hx-post="/continue?id={{.ID}}"
+                        hx-target="closest tr"
+                        hx-swap="outerHTML"
+                        title="{{.Data.PausedReason}}"
+                        onclick="event.stopPropagation()">Continue</button>
+                <a class="btn btn-sm" href="/download?id={{.ID}}&amp;format=xlsx" download onclick="event.stopPropagation()">Excel</a>
+            {{ end }}
+            {{ if eq .Status "ok" }}
+                <button type="button" class="btn btn-sm" onclick="event.stopPropagation();selectJob('{{.ID}}', '{{.Name}}')">Results</button>
+                <a class="btn btn-sm" href="/download?id={{.ID}}&amp;format=xlsx" download onclick="event.stopPropagation()">Excel</a>
+                <button type="button" class="btn btn-sm"
+                        hx-post="/restart?id={{.ID}}"
+                        hx-target="#job-rows"
+                        hx-swap="afterbegin"
+                        hx-confirm="Run this scan again with the same settings?"
+                        onclick="event.stopPropagation()">Restart</button>
+            {{ end }}
+            <button type="button" class="btn btn-sm btn-danger"
+                    hx-delete="/delete?id={{.ID}}"
+                    hx-target="closest tr"
+                    hx-swap="outerHTML"
+                    hx-confirm="Delete this job and its results?"
+                    onclick="event.stopPropagation()">Delete</button>
+        </div>
     </td>
 </tr>
 {{end}}

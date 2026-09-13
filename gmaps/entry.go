@@ -131,6 +131,10 @@ type Entry struct {
 	UserReviews         []Review     `json:"user_reviews"`
 	UserReviewsExtended []Review     `json:"user_reviews_extended"`
 	Emails              []string     `json:"emails"`
+	Socials             Socials      `json:"socials"`
+	// Keyword is the search term that produced this result. With several
+	// searches in one job it is what groups the output by category.
+	Keyword string `json:"keyword"`
 }
 
 // entryAlias is used inside Marshal/UnmarshalJSON to avoid infinite recursion
@@ -205,19 +209,11 @@ func (e *Entry) IsWebsiteValidForEmail() bool {
 		return false
 	}
 
-	needles := []string{
-		"facebook",
-		"instragram",
-		"twitter",
-	}
-
-	for i := range needles {
-		if strings.Contains(e.WebSite, needles[i]) {
-			return false
-		}
-	}
-
-	return true
+	// A social profile is not a site we can crawl for contact details, and it is
+	// already recorded in Socials by adoptWebsiteAsSocial. Matching on the shared
+	// host table also fixes the old substring check, which missed Instagram
+	// (it tested for "instragram") and matched any URL merely containing the word.
+	return !isSocialWebsite(e.WebSite)
 }
 
 func (e *Entry) Validate() error {
@@ -235,6 +231,7 @@ func (e *Entry) Validate() error {
 func (e *Entry) CsvHeaders() []string {
 	return []string{
 		"input_id",
+		"search_term",
 		"link",
 		"title",
 		"category",
@@ -270,12 +267,21 @@ func (e *Entry) CsvHeaders() []string {
 		"user_reviews",
 		"user_reviews_extended",
 		"emails",
+		"social",
+		"facebook",
+		"instagram",
+		"linkedin",
+		"twitter_x",
+		"youtube",
+		"tiktok",
+		"whatsapp",
 	}
 }
 
 func (e *Entry) CsvRow() []string {
 	return []string{
 		e.ID,
+		e.Keyword,
 		e.Link,
 		e.Title,
 		e.Category,
@@ -311,6 +317,14 @@ func (e *Entry) CsvRow() []string {
 		stringify(e.UserReviews),
 		stringify(e.UserReviewsExtended),
 		stringSliceToString(e.Emails),
+		e.Socials.String(),
+		e.Socials.Facebook,
+		e.Socials.Instagram,
+		e.Socials.LinkedIn,
+		e.Socials.TwitterX,
+		e.Socials.YouTube,
+		e.Socials.TikTok,
+		e.Socials.WhatsApp,
 	}
 }
 
@@ -544,7 +558,23 @@ func EntryFromJSON(raw []byte, reviewCountOnly ...bool) (entry Entry, err error)
 		}
 	}
 
+	// A sizeable share of businesses list a Facebook or Instagram page as their
+	// only "website". Capture it here, before any website enrichment runs, so the
+	// social columns are populated even when enrichment is disabled.
+	entry.adoptWebsiteAsSocial()
+
 	return entry, nil
+}
+
+// adoptWebsiteAsSocial records the Maps "website" field as a social profile when
+// it points at a social network rather than at a site of the business's own.
+func (e *Entry) adoptWebsiteAsSocial() {
+	if e.WebSite == "" {
+		return
+	}
+
+	found := extractSocials([]string{e.WebSite})
+	e.Socials.Merge(&found)
 }
 
 func parseReviews(reviewsI []any) []Review {

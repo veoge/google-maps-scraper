@@ -54,6 +54,7 @@ type Config struct {
 	InputFile                string
 	ResultsFile              string
 	JSON                     bool
+	XLSX                     bool
 	LangCode                 string
 	Debug                    bool
 	Dsn                      string
@@ -108,7 +109,7 @@ func ParseConfig() *Config {
 		proxiesFile string
 	)
 
-	flag.IntVar(&cfg.Concurrency, "c", min(runtime.NumCPU()/2, 1), "sets the concurrency [default: half of CPU cores]")
+	flag.IntVar(&cfg.Concurrency, "c", max(runtime.NumCPU()/2, 1), "sets the concurrency [default: half of CPU cores]")
 	flag.StringVar(&cfg.CacheDir, "cache", "cache", "sets the cache directory [no effect at the moment]")
 	flag.IntVar(&cfg.MaxDepth, "depth", 10, "maximum scroll depth in search results [default: 10]")
 	flag.StringVar(&cfg.ResultsFile, "results", "stdout", "path to the results file [default: stdout]")
@@ -119,6 +120,7 @@ func ParseConfig() *Config {
 	flag.BoolVar(&cfg.ProduceOnly, "produce", false, "produce seed jobs only (requires dsn)")
 	flag.DurationVar(&cfg.ExitOnInactivityDuration, "exit-on-inactivity", 0, "exit after inactivity duration (e.g., '5m')")
 	flag.BoolVar(&cfg.JSON, "json", false, "produce JSON output instead of CSV")
+	flag.BoolVar(&cfg.XLSX, "xlsx", false, "produce a formatted Excel workbook instead of CSV (implied by a .xlsx -results path)")
 	flag.BoolVar(&cfg.Email, "email", false, "extract emails from websites")
 	flag.StringVar(&cfg.CustomWriter, "writer", "", "use custom writer plugin (format: 'dir:pluginName')")
 	flag.StringVar(&cfg.GeoCoordinates, "geo", "", "set geo coordinates for search (e.g., '37.7749,-122.4194')")
@@ -169,6 +171,16 @@ func ParseConfig() *Config {
 		fmt.Printf("%s-%s\n", version, commit)
 
 		os.Exit(0)
+	}
+
+	// Naming the output .xlsx is an unambiguous request for a workbook, so honour
+	// it without also requiring -xlsx.
+	if strings.HasSuffix(strings.ToLower(cfg.ResultsFile), ".xlsx") {
+		cfg.XLSX = true
+	}
+
+	if cfg.XLSX && cfg.JSON {
+		panic("-xlsx and -json cannot be combined")
 	}
 
 	if cfg.AwsAccessKey == "" {

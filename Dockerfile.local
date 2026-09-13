@@ -1,0 +1,22 @@
+# Fast local build.
+#
+# The main Dockerfile builds Playwright and Chromium from scratch, which takes
+# roughly twenty minutes. For iterating on the scraper itself none of that
+# changes, so this file compiles only the Go binary and drops it into the
+# published image, which already carries the browser and its dependencies.
+#
+#   docker build -f Dockerfile.local -t google-maps-scraper:local .
+#
+# Use the main Dockerfile for releases; this one is for development.
+ARG RUNTIME_IMAGE=gosom/google-maps-scraper:latest
+
+FROM golang:1.26.6-trixie AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o /usr/bin/google-maps-scraper
+
+FROM ${RUNTIME_IMAGE}
+COPY --from=builder /usr/bin/google-maps-scraper /usr/bin/google-maps-scraper
+ENTRYPOINT ["google-maps-scraper"]

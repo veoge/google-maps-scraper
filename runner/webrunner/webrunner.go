@@ -2,10 +2,8 @@ package webrunner
 
 import (
 	"context"
-	"encoding/csv"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,21 +12,25 @@ import (
 
 	"github.com/gosom/google-maps-scraper/deduper"
 	"github.com/gosom/google-maps-scraper/exiter"
+	"github.com/gosom/google-maps-scraper/grid"
 	"github.com/gosom/google-maps-scraper/runner"
 	"github.com/gosom/google-maps-scraper/tlmt"
 	"github.com/gosom/google-maps-scraper/web"
 	"github.com/gosom/google-maps-scraper/web/sqlite"
 	"github.com/gosom/scrapemate"
-	"github.com/gosom/scrapemate/adapters/writers/csvwriter"
 	"github.com/gosom/scrapemate/scrapemateapp"
 	"golang.org/x/sync/errgroup"
 )
+
+// defaultCellSizeKm is the grid resolution used when a city is selected but no
+// coverage level is given. 3km keeps a mid-sized city to a few hundred cells.
+const defaultCellSizeKm = 3.0
 
 type webrunner struct {
 	srv       *web.Server
 	svc       *web.Service
 	cfg       *runner.Config
-	setupMate func(context.Context, io.Writer, *web.Job) (mateRunner, error)
+	setupMate func(context.Context, *os.File, *web.Job) (mateRunner, error)
 }
 
 type mateRunner interface {
@@ -72,6 +74,10 @@ func New(cfg *runner.Config) (runner.Runner, error) {
 }
 
 func (w *webrunner) Run(ctx context.Context) error {
+	if err := w.recoverStuckJobs(ctx); err != nil {
+		log.Printf("could not recover interrupted jobs: %v", err)
+	}
+
 	egroup, ctx := errgroup.WithContext(ctx)
 
 	egroup.Go(func() error {
@@ -86,6 +92,36 @@ func (w *webrunner) Run(ctx context.Context) error {
 }
 
 func (w *webrunner) Close(context.Context) error {
+	return nil
+}
+
+// recoverStuckJobs closes out jobs left mid-run by a previous process. Nothing is
+// running when the runner starts, so a job still marked "working" was interrupted
+// — a restart, a crash, or a copied database. Left alone it stays "working" for
+// ever: it never shows an outcome, never offers its results, and its elapsed timer
+// counts up indefinitely.
+func (w *webrunner) recoverStuckJobs(ctx context.Context) error {
+	jobs, err := w.svc.All(ctx)
+	if err != nil {
+		return err
+	}
+
+	for i := range jobs {
+		// A paused job is waiting for a person, not for a process, so it is left
+		// exactly as it is.
+		if jobs[i].Status != web.StatusWorking {
+			continue
+		}
+
+		jobs[i].MarkFinished(web.StatusFailed)
+
+		if err := w.svc.Update(ctx, &jobs[i]); err != nil {
+			return err
+		}
+
+		log.Printf("job %s was interrupted before it finished; marked failed", jobs[i].ID)
+	}
+
 	return nil
 }
 
@@ -138,7 +174,7 @@ func (w *webrunner) work(ctx context.Context) error {
 }
 
 func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
-	job.Status = web.StatusWorking
+	job.MarkStarted()
 
 	err := w.svc.Update(ctx, job)
 	if err != nil {
@@ -146,14 +182,17 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 	}
 
 	if len(job.Data.Keywords) == 0 {
-		job.Status = web.StatusFailed
+		job.MarkFinished(web.StatusFailed)
 
 		return w.svc.Update(ctx, job)
 	}
 
 	outpath := filepath.Join(w.cfg.DataFolder, job.ID+".csv")
 
-	outfile, err := os.Create(outpath)
+	// A continued run appends: the results collected before the pause stay.
+	resuming := job.Data.Progress > 0
+
+	outfile, err := openResultFile(outpath, resuming)
 	if err != nil {
 		return err
 	}
@@ -169,7 +208,7 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 
 	mate, err := setupMate(ctx, outfile, job)
 	if err != nil {
-		job.Status = web.StatusFailed
+		job.MarkFinished(web.StatusFailed)
 
 		err2 := w.svc.Update(ctx, job)
 		if err2 != nil {
@@ -189,33 +228,34 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 	dedup := deduper.New()
 	exitMonitor := exiter.New()
 
-	seedJobs, err := runner.CreateSeedJobs(
-		job.Data.FastMode,
-		job.Data.Lang,
-		strings.NewReader(strings.Join(job.Data.Keywords, "\n")),
-		job.Data.Depth,
-		job.Data.Email,
-		coords,
-		job.Data.Zoom,
-		func() float64 {
-			if job.Data.Radius <= 0 {
-				return 10000 // 10 km
-			}
-
-			return float64(job.Data.Radius)
-		}(),
-		dedup,
-		exitMonitor,
-		w.cfg.ExtraReviews || job.Data.ExtraReviews,
-	)
+	seedJobs, err := w.buildSeedJobs(job, dedup, exitMonitor, coords)
 	if err != nil {
-		err2 := w.svc.Update(ctx, job)
-		if err2 != nil {
+		job.MarkFinished(web.StatusFailed)
+
+		if err2 := w.svc.Update(ctx, job); err2 != nil {
 			log.Printf("failed to update job status: %v", err2)
 		}
 
 		return err
 	}
+
+	if resuming {
+		seeded, derr := seedDeduper(outpath, dedup)
+		if derr != nil {
+			log.Printf("job %s: could not seed deduper: %v", job.ID, derr)
+		}
+
+		if job.Data.Progress < len(seedJobs) {
+			log.Printf("job %s continuing from search %d of %d (%d results already held)",
+				job.ID, job.Data.Progress, len(seedJobs), seeded)
+
+			seedJobs = seedJobs[job.Data.Progress:]
+		} else {
+			seedJobs = nil
+		}
+	}
+
+	done := job.Data.Progress
 
 	if len(seedJobs) > 0 {
 		exitMonitor.SetSeedCount(len(seedJobs))
@@ -239,9 +279,42 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 
 		go exitMonitor.Run(mateCtx)
 
+		// The connection is watched for the whole run. If it stays down the run is
+		// stopped rather than left to burn every retry against a dead network and
+		// silently skip the areas it was working on.
+		outage := false
+
+		netCtx, stopWatch := context.WithCancel(mateCtx)
+		defer stopWatch()
+
+		go watchNetwork(netCtx, cancel, &outage)
+
 		err = mate.Start(mateCtx, seedJobs...)
+
+		stopWatch()
+
+		if outage {
+			cancel()
+
+			// Resume from the start of this batch: redoing searches is cheap and
+			// safe, while skipping any is not. De-duplication stops repeats.
+			job.MarkPaused("The internet connection dropped, so the scan stopped to "+
+				"avoid skipping areas. Press Continue when you are back online.",
+				job.Data.Progress)
+
+			if err2 := w.svc.Update(ctx, job); err2 != nil {
+				log.Printf("failed to update job status: %v", err2)
+			}
+
+			log.Printf("job %s paused: network unreachable", job.ID)
+
+			return nil
+		}
+
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 			cancel()
+
+			job.MarkFinished(web.StatusFailed)
 
 			err2 := w.svc.Update(ctx, job)
 			if err2 != nil {
@@ -251,16 +324,97 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 			return err
 		}
 
+		done += len(seedJobs)
+
 		cancel()
 	}
 
-	job.Status = web.StatusOK
+	job.Data.Progress = done
+	job.Data.PausedReason = ""
+
+	job.MarkFinished(web.StatusOK)
 
 	return w.svc.Update(ctx, job)
 }
 
-func defaultSetupMate(cfg *runner.Config) func(context.Context, io.Writer, *web.Job) (mateRunner, error) {
-	return func(_ context.Context, writer io.Writer, job *web.Job) (mateRunner, error) {
+// buildSeedJobs turns the job's location settings into the searches to run: one
+// per grid cell per term when areas are selected, otherwise one per term.
+func (w *webrunner) buildSeedJobs(
+	job *web.Job,
+	dedup deduper.Deduper,
+	exitMonitor exiter.Exiter,
+	coords string,
+) ([]scrapemate.IJob, error) {
+	queryText := strings.Join(job.Data.Keywords, "\n")
+	areas := job.Data.Areas()
+
+	if len(areas) == 0 {
+		radius := float64(job.Data.Radius)
+		if job.Data.Radius <= 0 {
+			radius = 10000 // 10 km
+		}
+
+		return runner.CreateSeedJobs(
+			job.Data.FastMode,
+			job.Data.Lang,
+			strings.NewReader(queryText),
+			job.Data.Depth,
+			job.Data.Email,
+			coords,
+			job.Data.Zoom,
+			radius,
+			dedup,
+			exitMonitor,
+			w.cfg.ExtraReviews || job.Data.ExtraReviews,
+		)
+	}
+
+	cellSize := job.Data.CellSizeKm
+	if cellSize <= 0 {
+		cellSize = defaultCellSizeKm
+	}
+
+	var (
+		seedJobs   []scrapemate.IJob
+		totalCells int
+	)
+
+	for _, area := range areas {
+		bbox, err := grid.ParseBoundingBox(area)
+		if err != nil {
+			return nil, err
+		}
+
+		// A fresh reader per area: the previous one is already consumed.
+		areaJobs, err := runner.CreateGridSeedJobs(
+			job.Data.Lang,
+			strings.NewReader(queryText),
+			job.Data.Depth,
+			job.Data.Email,
+			bbox,
+			cellSize,
+			job.Data.Zoom,
+			dedup,
+			exitMonitor,
+			w.cfg.ExtraReviews || job.Data.ExtraReviews,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		totalCells += grid.EstimateCellCount(bbox, cellSize)
+
+		seedJobs = append(seedJobs, areaJobs...)
+	}
+
+	log.Printf("job %s covers %d area(s) as %d cells of %.1fkm",
+		job.ID, len(areas), totalCells, cellSize)
+
+	return seedJobs, nil
+}
+
+func defaultSetupMate(cfg *runner.Config) func(context.Context, *os.File, *web.Job) (mateRunner, error) {
+	return func(_ context.Context, writer *os.File, job *web.Job) (mateRunner, error) {
 		opts := []func(*scrapemateapp.Config) error{
 			scrapemateapp.WithConcurrency(cfg.Concurrency),
 			scrapemateapp.WithExitOnInactivity(time.Minute * 3),
@@ -299,9 +453,27 @@ func defaultSetupMate(cfg *runner.Config) func(context.Context, io.Writer, *web.
 
 		log.Printf("job %s has proxy: %v", job.ID, hasProxy)
 
-		csvWriter := csvwriter.NewCsvWriter(csv.NewWriter(writer))
+		resultWriter, err := newResultWriter(writer)
+		if err != nil {
+			return nil, err
+		}
 
-		writers := []scrapemate.ResultWriter{csvWriter}
+		// When the job covers specific areas, keep the output to those areas.
+		if boxes := job.Data.Areas(); len(boxes) > 0 {
+			parsed := make([]grid.BoundingBox, 0, len(boxes))
+
+			for _, b := range boxes {
+				if bbox, err := grid.ParseBoundingBox(b); err == nil {
+					parsed = append(parsed, bbox)
+				}
+			}
+
+			if len(parsed) > 0 {
+				resultWriter = newAreaFilterWriter(resultWriter, parsed...)
+			}
+		}
+
+		writers := []scrapemate.ResultWriter{resultWriter}
 
 		matecfg, err := scrapemateapp.NewConfig(
 			writers,

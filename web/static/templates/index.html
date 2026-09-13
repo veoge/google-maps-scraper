@@ -1,160 +1,311 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Google Maps Scraper</title>
     <link rel="stylesheet" href="/static/css/main.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/htmx/1.9.6/htmx.min.js"></script>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📍</text></svg>">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/htmx/1.9.6/htmx.min.js" defer></script>
+    <script src="/static/js/dropdown.js" defer></script>
+    <script src="/static/js/app.js" defer></script>
 </head>
 <body>
-    <div class="app-container">
-        <header>
-            <h1>Google Maps Scraper</h1>
-            <nav>
-                <a href="/api/docs" target="_blank" rel="noopener noreferrer">API Documentation</a>
-            </nav>
-            <div class="github-section">
-                <p>If you find this tool useful, please consider starring our repository: </p>
-                <a href="https://github.com/gosom/google-maps-scraper" class="github-button">
-                <svg height="16" width="16" viewBox="0 0 16 16">
-                    <path fill="currentColor" d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/>
-                  </svg>
-                  Star on GitHub
-                </a>
-            </div>
-            <div id="sponsor-section" class="sponsor-section">
-    <button class="sponsor-close" onclick="hideSponsor()">
-        ×
-    </button>
-    <p class="sponsor-text">Support the ongoing maintenance and development of this project by becoming a sponsor. Your contribution helps ensure the tool's continued improvement and reliability.</p>
-    <a href="https://github.com/sponsors/gosom" class="sponsor-button" target="_blank" rel="noopener noreferrer">
-        <svg height="16" width="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-            <path fill-rule="evenodd" clip-rule="evenodd" d="M4.25 2.5C4.25 1.83696 4.67143 1.25 5.25 1.25C5.82857 1.25 6.25 1.83696 6.25 2.5C6.25 3.16304 5.82857 3.75 5.25 3.75C4.67143 3.75 4.25 3.16304 4.25 2.5ZM2.5 3.75C1.92143 3.75 1.5 3.16304 1.5 2.5C1.5 1.83696 1.92143 1.25 2.5 1.25C3.07857 1.25 3.5 1.83696 3.5 2.5C3.5 3.16304 3.07857 3.75 2.5 3.75ZM8 1.25C7.42143 1.25 7 1.83696 7 2.5C7 3.16304 7.42143 3.75 8 3.75C8.57857 3.75 9 3.16304 9 2.5C9 1.83696 8.57857 1.25 8 1.25ZM10.75 2.5C10.75 1.83696 11.1714 1.25 11.75 1.25C12.3286 1.25 12.75 1.83696 12.75 2.5C12.75 3.16304 12.3286 3.75 11.75 3.75C11.1714 3.75 10.75 3.16304 10.75 2.5ZM14.5 1.25C13.9214 1.25 13.5 1.83696 13.5 2.5C13.5 3.16304 13.9214 3.75 14.5 3.75C15.0786 3.75 15.5 3.16304 15.5 2.5C15.5 1.83696 15.0786 1.25 14.5 1.25ZM1.25 5.25C1.25 4.67143 1.83696 4.25 2.5 4.25C3.16304 4.25 3.75 4.67143 3.75 5.25C3.75 5.82857 3.16304 6.25 2.5 6.25C1.83696 6.25 1.25 5.82857 1.25 5.25ZM5.25 4.25C4.67143 4.25 4.25 4.67143 4.25 5.25C4.25 5.82857 4.67143 6.25 5.25 6.25C5.82857 6.25 6.25 5.82857 6.25 5.25C6.25 4.67143 5.82857 4.25 5.25 4.25ZM7 5.25C7 4.67143 7.42143 4.25 8 4.25C8.57857 4.25 9 4.67143 9 5.25C9 5.82857 8.57857 6.25 8 6.25C7.42143 6.25 7 5.82857 7 5.25ZM11.75 4.25C11.1714 4.25 10.75 4.67143 10.75 5.25C10.75 5.82857 11.1714 6.25 11.75 6.25C12.3286 6.25 12.75 5.82857 12.75 5.25C12.75 4.67143 12.3286 4.25 11.75 4.25ZM13.5 5.25C13.5 4.67143 13.9214 4.25 14.5 4.25C15.0786 4.25 15.5 4.67143 15.5 5.25C15.5 5.82857 15.0786 6.25 14.5 6.25C13.9214 6.25 13.5 5.82857 13.5 5.25ZM2.5 7.25C1.83696 7.25 1.25 7.67143 1.25 8.25C1.25 8.82857 1.83696 9.25 2.5 9.25C3.16304 9.25 3.75 8.82857 3.75 8.25C3.75 7.67143 3.16304 7.25 2.5 7.25ZM4.25 8.25C4.25 7.67143 4.67143 7.25 5.25 7.25C5.82857 7.25 6.25 7.67143 6.25 8.25C6.25 8.82857 5.82857 9.25 5.25 9.25C4.67143 9.25 4.25 8.82857 4.25 8.25ZM8 7.25C7.42143 7.25 7 7.67143 7 8.25C7 8.82857 7.42143 9.25 8 9.25C8.57857 9.25 9 8.82857 9 8.25C9 7.67143 8.57857 7.25 8 7.25ZM10.75 8.25C10.75 7.67143 11.1714 7.25 11.75 7.25C12.3286 7.25 12.75 7.67143 12.75 8.25C12.75 8.82857 12.3286 9.25 11.75 9.25C11.1714 9.25 10.75 8.82857 10.75 8.25ZM14.5 7.25C13.9214 7.25 13.5 7.67143 13.5 8.25C13.5 8.82857 13.9214 9.25 14.5 9.25C15.0786 9.25 15.5 8.82857 15.5 8.25C15.5 7.67143 15.0786 7.25 14.5 7.25Z" fill="currentColor"/>
-        </svg>
-        Sponsor on GitHub
-    </a>
-</div>
 
-        </header>
-        <main>
-            <div class="sidebar">
-                <div id="error-container" class="error-message"></div>
-                <form 
-                    hx-post="/scrape" 
-                    hx-target="#job-table tbody" 
-                    hx-swap="beforeend"
-                    hx-indicator="#spinner"
-                    hx-on::before-request="document.getElementById('error-container').innerHTML = ''"
-                    hx-on::after-request="if(!event.detail.successful) document.getElementById('error-container').innerHTML = event.detail.xhr.responseText"
-                >
-                    
-                    <fieldset>
-                        <legend>Job Details</legend>
-                        <div class="form-group">
-                            <label for="name">Job Name:</label>
-                            <input type="text" id="name" name="name" value="{{.Name}}">
-                        </div>
-                        <div class="form-group">
-                            <label for="keywords">Keywords:</label>
-                            <textarea id="keywords" name="keywords" rows="10">{{ .KeywordsString }}</textarea>
-                        </div>
-                        <div class="form-group">
-                            <label for="lang">Language:</label>
-                            <input type="text" id="lang" name="lang" value="{{.Language}}">
-                        </div>
-                    </fieldset>
-                    
-                    <details class="expandable-section">
-                        <summary>Location Settings</summary>
-                        <fieldset>
-                            <div class="form-group">
-                                <label for="zoom">Zoom:</label>
-                                <input type="number" id="zoom" name="zoom" value="{{.Zoom}}">
-                            </div>
-                            <div class="form-group">
-                                <label for="latitude">Latitude:</label>
-                                <input type="number" step="0.000000000000001" id="latitude" name="latitude" value="{{.Lat}}">
-                            </div>
-                            <div class="form-group">
-                                <label for="longitude">Longitude:</label>
-                                <input type="number" step="0.000000000000001" id="longitude" name="longitude" value="{{.Lon}}">
-                            </div>
-                        </fieldset>
-                    </details>
-                    
-                    <details class="expandable-section">
-                        <summary>Advanced Options</summary>
-                        <fieldset>
-                            <div class="form-group">
-                                <label for="fastmode">Fast Mode (BETA):</label>
-                                <input type="checkbox" id="fastmode" name="fastmode" {{if .FastMode}}checked{{end}}>
-                            </div>
-                            <div class="form-group">
-                                    <label for="radius">Radius (BETA):</label>
-                                    <input type="number" id="radius" name="radius" value="{{.Radius}}">
-                            </div>
-                            <div class="form-group">
-                                <label for="depth">Depth:</label>
-                                <input type="number" step="1" id="depth" name="depth" value="{{.Depth}}">
-                            </div>
-                            <div class="form-group checkbox">
-                                <input type="checkbox" id="email" name="email" {{if .Email}}checked{{end}}>
-                                <label for="email">Fetch Emails</label>
-                            </div>
-                            <div class="form-group">
-                                <label for="maxtime">Max job time:</label>
-                                <input type="text" id="maxtime" name="maxtime" value="{{.MaxTime}}">
-                            </div>
-                        </fieldset>
-                    </details>
-                    <details class="expandable-section">
-                        <summary>Proxies</summary>
-                        <fieldset>
-                            <div class="form-group">
-                                <label for="proxies">Proxies:(one per line)</label>
-                                <p class="text-muted"><small>Examples:<br>
-                                        <p>HTTPS proxy with username/password: https://username:password@myproxy.local:443<p>
-                                        <p>HTTP proxy with username/password: http://username:password@myproxy.local:443<p>
-                                        <p>SOCKS5 proxy without auth: socks5://127.0.0.1:8000</p>
-                                </p>
-
-                                <textarea id="proxies" name="proxies" rows="5">{{.ProxiesString}}</textarea>
-                            </div>
-                        </fieldset>
-                    </details>
-                    
-                    <button type="submit">Start Scraping</button>
-                </form>
-            </div>
-            <div class="content">
-                <div id="spinner" class="spinner"></div>
-                <table id="job-table">
-                    <thead>
-                        <tr>
-                            <th>Job ID</th>
-                            <th>Job Name</th>
-                            <th>Job Date</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody hx-get="/jobs" hx-trigger="load, every 10s">
-                        <!-- Job rows will be inserted here by HTMX -->
-                    </tbody>
-                </table>
-            </div>
-        </main>
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 10c0 6-9 13-9 13s-9-7-9-13a9 9 0 0 1 18 0z"/>
+                <circle cx="12" cy="10" r="3"/>
+            </svg>
+        </span>
+        Google Maps Scraper
     </div>
 
-    <div id="map-modal-container"></div>
-<script>
-function hideSponsor() {
-    const sponsorSection = document.getElementById('sponsor-section');
-    if (sponsorSection) {
-        sponsorSection.style.display = 'none';
-    }
-}
-</script>
+    <div class="topbar-spacer"></div>
+
+    <nav class="topbar-links">
+        <a href="/api/docs" target="_blank" rel="noopener noreferrer">API docs</a>
+        <a href="https://github.com/gosom/google-maps-scraper" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <button type="button" id="theme-toggle" class="icon-button" title="Toggle theme" aria-label="Toggle colour theme">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>
+            </svg>
+        </button>
+    </nav>
+</header>
+
+<div class="layout">
+
+    <aside class="sidebar">
+        <h1 class="form-title" id="form-title">New scrape</h1>
+        <p class="form-sub" id="form-sub">Pick a place, list what to look for, and the results appear here when the job finishes.</p>
+
+        <div class="config-banner" id="config-banner" hidden>
+            <div>
+                <span class="config-banner-label">Settings from</span>
+                <span class="config-banner-name" id="config-banner-name"></span>
+            </div>
+            <button type="button" class="btn btn-sm" id="config-reset">New scrape</button>
+        </div>
+
+        <div id="error-container" class="alert" role="alert"></div>
+
+        <form hx-post="/scrape"
+              hx-target="#job-rows"
+              hx-swap="afterbegin"
+              hx-indicator="#submit-spinner"
+              hx-on::before-request="document.getElementById('error-container').innerHTML = ''"
+              hx-on::after-request="if(!event.detail.successful) document.getElementById('error-container').textContent = event.detail.xhr.responseText">
+
+            <fieldset>
+                <div class="field">
+                    <label for="name">Job name</label>
+                    <input type="text" id="name" name="name" value="{{.Name}}" placeholder="Dentists in Berlin">
+                </div>
+
+                <div class="field">
+                    <label for="keywords">Searches</label>
+                    <textarea id="keywords" name="keywords" rows="6"
+                              placeholder="dentist in Berlin&#10;dental clinic in Berlin">{{ .KeywordsString }}</textarea>
+                    <div class="field-hint">One per line, or separated by commas. Each search becomes its own sheet in the Excel export.</div>
+                </div>
+
+                <div class="field-row">
+                    <div class="field">
+                        <label for="lang">Language</label>
+                        <input type="text" id="lang" name="lang" value="{{.Language}}" maxlength="2">
+                    </div>
+                    <div class="field">
+                        <label for="depth">Depth</label>
+                        <input type="number" id="depth" name="depth" value="{{.Depth}}" min="1">
+                    </div>
+                </div>
+
+                <div class="field-row">
+                    <div class="field">
+                        <label for="country">Country</label>
+                        <select id="country" name="country"></select>
+                    </div>
+                    <div class="field">
+                        <label for="city">City</label>
+                        <select id="city" name="city" data-placeholder="All cities"></select>
+                    </div>
+                </div>
+
+                <div class="field">
+                    <label for="scanmode">Scan mode</label>
+                    <select id="scanmode">
+                        <option value="quick">Quick look — fast sample</option>
+                        <option value="standard" selected>Standard — full coverage</option>
+                        <option value="everything">Everything — deepest grid</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                    <div class="field-hint">Sets coverage, depth and enrichment together. Change any of them and this becomes Custom.</div>
+                </div>
+
+                <div class="field" id="coverage-field" hidden>
+                    <label for="coverage">Coverage</label>
+                    <select id="coverage" name="coverage">
+                        <option value="balanced" selected>Full coverage — 3 km areas</option>
+                        <option value="thorough">Maximum — 1.5 km areas</option>
+                        <option value="quick">Lighter — 6 km areas</option>
+                        <option value="single">Sample only — NOT full coverage</option>
+                    </select>
+                    <div class="estimate" id="estimate-panel">
+                        <div class="estimate-metrics">
+                            <div class="estimate-metric">
+                                <span class="estimate-value" id="est-results">—</span>
+                                <span class="estimate-label">businesses expected</span>
+                            </div>
+                            <div class="estimate-metric">
+                                <span class="estimate-value" id="est-time">—</span>
+                                <span class="estimate-label">estimated time</span>
+                            </div>
+                        </div>
+                        <div class="estimate-detail" id="est-detail"></div>
+                    </div>
+
+                    <div class="field-hint" id="coverage-estimate"></div>
+                </div>
+
+                <label class="switch" for="email">
+                    <input type="checkbox" id="email" name="email" {{if .Email}}checked{{end}}>
+                    <span>
+                        <span class="switch-text">Enrich from website</span>
+                        <span class="switch-hint">Visits each business site to collect email addresses and social profiles. Roughly doubles run time.</span>
+                    </span>
+                </label>
+
+                <div class="field">
+                    <label for="maxtime">Maximum run time</label>
+                    <input type="text" id="maxtime" name="maxtime" value="{{.MaxTime}}">
+                    <div class="field-hint">Minimum 3m. Accepts values such as 10m or 1h.</div>
+                </div>
+            </fieldset>
+
+            <details class="advanced">
+                <summary>Manual coordinates</summary>
+                <div class="details-body">
+                    <div class="field">
+                        <label for="zoom">Zoom</label>
+                        <input type="number" id="zoom" name="zoom" value="{{.Zoom}}" min="0" max="21">
+                    </div>
+                    <div class="field-row">
+                        <div class="field">
+                            <label for="latitude">Latitude</label>
+                            <input type="number" step="0.000000000000001" id="latitude" name="latitude" value="{{.Lat}}">
+                        </div>
+                        <div class="field">
+                            <label for="longitude">Longitude</label>
+                            <input type="number" step="0.000000000000001" id="longitude" name="longitude" value="{{.Lon}}">
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="radius">Radius (metres)</label>
+                        <input type="number" id="radius" name="radius" value="{{.Radius}}">
+                    </div>
+                    <label class="switch" for="fastmode">
+                        <input type="checkbox" id="fastmode" name="fastmode" {{if .FastMode}}checked{{end}}>
+                        <span>
+                            <span class="switch-text">Fast mode (beta)</span>
+                            <span class="switch-hint">Skips the browser for speed. Collects less detail and needs coordinates.</span>
+                        </span>
+                    </label>
+                </div>
+            </details>
+
+            <details class="advanced">
+                <summary>Proxies</summary>
+                <div class="details-body">
+                    <div class="field">
+                        <label for="proxies">Proxy list</label>
+                        <textarea id="proxies" name="proxies" rows="4"
+                                  placeholder="http://user:pass@host:8080&#10;socks5://127.0.0.1:9050">{{.ProxiesString}}</textarea>
+                        <div class="field-hint">One per line. Recommended for large jobs.</div>
+                    </div>
+                </div>
+            </details>
+
+            <button type="submit" class="btn btn-primary btn-block" style="margin-top:14px">
+                <span id="submit-spinner" class="spinner"></span>
+                Start scraping
+            </button>
+        </form>
+    </aside>
+
+    <main class="main">
+
+        <section class="card">
+            <div class="card-header">
+                <h2>Jobs</h2>
+                <span class="muted small">Select a job to explore its results</span>
+            </div>
+            <div class="card-body flush">
+                <div class="table-wrap" style="max-height:none">
+                    <table class="jobs-table">
+                        <thead>
+                            <tr>
+                                <th>Job</th>
+                                <th>Name</th>
+                                <th>Started</th>
+                                <th>Status</th>
+                                <th>Duration</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="job-rows" hx-get="/jobs" hx-trigger="load, every 10s">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="card" id="results-card" hidden>
+            <div class="card-header">
+                <h2 id="results-title">Results</h2>
+                <span class="muted small" id="results-count"></span>
+
+                <div class="topbar-spacer"></div>
+
+                <div class="tabs" role="tablist">
+                    <button type="button" class="tab active" data-view="table" role="tab">Table</button>
+                    <button type="button" class="tab" data-view="map" role="tab">Map</button>
+                </div>
+
+                <div class="dropdown">
+                    <button type="button" class="btn" id="export-button">
+                        Export
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                    </button>
+                    <div class="dropdown-menu" id="export-menu">
+                        <a id="export-xlsx" href="#" download>
+                            Excel workbook (.xlsx)
+                            <span class="menu-hint">Formatted, with reviews and hours on their own sheets</span>
+                        </a>
+                        <a id="export-csv" href="#" download>
+                            CSV
+                            <span class="menu-hint">Raw columns, UTF-8 with BOM for Excel</span>
+                        </a>
+                        <a id="export-json" href="#" download>
+                            JSON
+                            <span class="menu-hint">Full nested data for developers</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stats" id="results-stats" hidden></div>
+
+            <div class="filters" id="results-filters" hidden>
+                <div class="search-field">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+                    <input type="search" id="filter-search" placeholder="Search name, address, phone, email…" aria-label="Search results">
+                </div>
+
+                <select id="filter-keyword" data-placeholder="All searches" aria-label="Filter by search term"></select>
+                <select id="filter-category" data-placeholder="All categories" aria-label="Filter by category"></select>
+                <select id="filter-city" data-placeholder="All cities" aria-label="Filter by city"></select>
+
+                <select id="filter-rating" data-placeholder="Any rating" aria-label="Minimum rating">
+                    <option value="">Any rating</option>
+                    <option value="3">3.0 and above</option>
+                    <option value="4">4.0 and above</option>
+                    <option value="4.5">4.5 and above</option>
+                </select>
+
+                <div class="filter-toggles">
+                    <label class="toggle-pill"><input type="checkbox" id="has-website">Website</label>
+                    <label class="toggle-pill"><input type="checkbox" id="has-phone">Phone</label>
+                    <label class="toggle-pill"><input type="checkbox" id="has-email">Email</label>
+                    <label class="toggle-pill"><input type="checkbox" id="has-social">Social</label>
+                    <label class="toggle-pill" id="group-pill"><input type="checkbox" id="group-by-search">Group by search</label>
+                </div>
+
+                <button type="button" class="btn btn-sm" id="clear-filters">Clear</button>
+            </div>
+
+            <div class="card-body flush" id="results-body"></div>
+            <div class="pagination" id="pagination" hidden></div>
+        </section>
+    </main>
+</div>
+
+<div class="drawer-backdrop" id="drawer-backdrop"></div>
+
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+    <div class="drawer-header">
+        <div style="flex:1;min-width:0">
+            <h3 id="drawer-title"></h3>
+            <div class="muted small" id="drawer-sub"></div>
+        </div>
+        <button type="button" class="icon-button" id="drawer-close" aria-label="Close details">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
 </body>
 </html>

@@ -127,18 +127,26 @@ func EstimateCellCount(bbox BoundingBox, cellSizeKm float64) int {
 	latStep := cellSizeKm / kmPerDegreeLat
 	lonStep := calculateLonStep(bbox, cellSizeKm)
 
-	latCells := int(math.Ceil((bbox.MaxLat - bbox.MinLat) / latStep))
-	lonCells := int(math.Ceil((bbox.MaxLon - bbox.MinLon) / lonStep))
+	return countSteps(bbox.MaxLat-bbox.MinLat, latStep) *
+		countSteps(bbox.MaxLon-bbox.MinLon, lonStep)
+}
 
-	if latCells < 0 {
-		latCells = 0
+// countSteps returns how many values the loops in GenerateCells visit along one
+// axis. They start half a step inside the edge and stop before the far edge, so
+// a plain ceil(span/step) overcounts — often by enough to double the estimate
+// for a small area, which matters because this number is shown to the user as a
+// time estimate before a job is started.
+func countSteps(span, step float64) int {
+	if span <= 0 || step <= 0 {
+		return 0
 	}
 
-	if lonCells < 0 {
-		lonCells = 0
+	n := int(math.Ceil((span - step/2) / step))
+	if n < 0 {
+		return 0
 	}
 
-	return latCells * lonCells
+	return n
 }
 
 func normalizeCellSizeKm(cellSizeKm float64) float64 {
